@@ -4,18 +4,13 @@ const playerSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true
+      ref: "User"
     },
     symbol: {
       type: String,
-      enum: ["X", "O"],
-      required: true
+      enum: ["X", "O"]
     },
-    socketId: {
-      type: String,
-      required: true
-    }
+    socketId: String
   },
   { _id: false }
 )
@@ -29,6 +24,12 @@ const roomSchema = new mongoose.Schema(
       index: true
     },
 
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
     board: {
       type: [String],
       default: () => Array(9).fill(null)
@@ -40,7 +41,8 @@ const roomSchema = new mongoose.Schema(
     },
 
     spectators: {
-      type: [String],
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "User",
       default: []
     },
 
@@ -60,9 +62,7 @@ const roomSchema = new mongoose.Schema(
       default: false
     }
   },
-  {
-    timestamps: true
-  }
+  { timestamps: true }
 )
 
 export default mongoose.model("Room", roomSchema)
