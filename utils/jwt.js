@@ -5,37 +5,29 @@ dotenv.config()
 
 const SECRET = process.env.JWT_SECRET
 
-// ❌ Do NOT crash server at import time
 if (!SECRET) {
-  console.error("❌ JWT_SECRET is not defined in environment variables")
+  console.error("JWT_SECRET is not defined")
 }
 
-/* =========================
-   SIGN TOKEN (STANDARDIZED)
-========================= */
 export function signToken(user) {
-  if (!SECRET) {
-    throw new Error("JWT_SECRET missing")
+  if (!user || !user._id) {
+    throw new Error("Invalid user object passed to signToken")
   }
 
   return jwt.sign(
-    {
-      id: user._id.toString()   // 🔥 ALWAYS use `id`
-    },
+    { id: user._id.toString() },
     SECRET,
     { expiresIn: "7d" }
   )
 }
 
-/* =========================
-   VERIFY TOKEN (SAFE)
-========================= */
 export function verifyToken(token) {
   if (!token || !SECRET) return null
 
   try {
     return jwt.verify(token, SECRET)
-  } catch (err) {
+  } catch {
     return null
   }
 }
+

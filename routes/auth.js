@@ -1,7 +1,7 @@
 import express from "express"
+import bcrypt from "bcryptjs"
 import User from "../models/User.js"
 import { signToken } from "../utils/jwt.js"
-import bcrypt from "bcryptjs"
 
 const router = express.Router()
 
@@ -21,17 +21,17 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "User already exists" })
     }
 
-    // ✅ DO NOT HASH HERE
     const user = await User.create({ username, password })
 
-    const token = signToken({
-      id: user._id,
-      username: user.username
-    })
+    // 🔥 FIX: pass USER object
+    const token = signToken(user)
 
-    res.json({
+    res.status(201).json({
       token,
-      user: { id: user._id, username: user.username }
+      user: {
+        id: user._id,
+        username: user.username
+      }
     })
   } catch (err) {
     console.error("Register error:", err)
@@ -50,7 +50,6 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Username and password required" })
     }
 
-    // 🔥 IMPORTANT FIX
     const user = await User.findOne({ username }).select("+password")
     if (!user) {
       return res.status(400).json({ error: "Invalid credentials" })
@@ -61,14 +60,15 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Invalid credentials" })
     }
 
-    const token = signToken({
-      id: user._id,
-      username: user.username
-    })
+    // 🔥 FIX: pass USER object
+    const token = signToken(user)
 
     res.json({
       token,
-      user: { id: user._id, username: user.username }
+      user: {
+        id: user._id,
+        username: user.username
+      }
     })
   } catch (err) {
     console.error("Login error:", err)
