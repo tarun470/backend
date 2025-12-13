@@ -1,11 +1,40 @@
-import mongoose from 'mongoose'
+import mongoose from "mongoose"
 
-const schema = new mongoose.Schema({
-  roomCode: String,
-  playerX: String,
-  playerO: String,
-  winner: String,
-  playedAt: { type: Date, default: Date.now }
-})
+const matchSchema = new mongoose.Schema(
+  {
+    roomCode: {
+      type: String,
+      required: true,
+      index: true
+    },
 
-export default mongoose.model('Match', schema)
+    playerX: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
+    playerO: {
+      type: mongoose.Schema.Types.Mixed, // ObjectId or "AI"
+      required: true
+    },
+
+    winner: {
+      type: String,
+      enum: ["X", "O", "D"],
+      required: true
+    }
+  },
+  {
+    timestamps: true
+  }
+)
+
+/* =========================
+   INDEXES FOR PERFORMANCE
+========================= */
+matchSchema.index({ playerX: 1 })
+matchSchema.index({ playerO: 1 })
+matchSchema.index({ createdAt: -1 })
+
+export default mongoose.model("Match", matchSchema)
