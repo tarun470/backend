@@ -12,6 +12,8 @@ function generateCode() {
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms))
 
+const toggleTurn = (turn) => (turn === "X" ? "O" : "X")
+
 /* =========================
    SOCKET HANDLER
 ========================= */
@@ -100,14 +102,14 @@ export const socketHandler = (io, socket) => {
   })
 
   /* =========================
-     JOIN ROOM
+     JOIN ROOM (SAFE)
   ========================= */
   socket.on("joinRoom", async ({ code }) => {
     try {
       const room = await Room.findOne({ code })
       if (!room) return socket.emit("roomError", "Room not found")
 
-      // 🔁 reconnect support
+      // reconnect
       const existing = room.players.find(p => p.userId.equals(user.id))
       if (existing) {
         existing.socketId = socket.id
@@ -116,8 +118,20 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // 👥 join as second player (1v1)
-      if (!room.isAI && room.players.length < 2) {
+      // ⚠️ SAFETY: if no players exist
+      if (room.players.length === 0) {
+        room.players.push({
+          userId: user.id,
+          symbol: "X",
+          socketId: socket.id
+        })
+        await room.save()
+        socket.join(code)
+        return io.to(code).emit("playerJoined", { room })
+      }
+
+      // second player (1v1)
+      if (!room.isAI && room.players.length === 1) {
         const symbol = room.players[0].symbol === "X" ? "O" : "X"
         room.players.push({
           userId: user.id,
@@ -129,7 +143,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // 👀 spectator
+      // spectator
       if (!room.spectators.some(id => id.equals(user.id))) {
         room.spectators.push(user.id)
         await room.save()
@@ -155,29 +169,17 @@ export const socketHandler = (io, socket) => {
       const player = room.players.find(p => p.socketId === socket.id)
       if (!player || room.turn !== player.symbol) return
 
-      /* ---------- PLAYER MOVE ---------- */
+      // PLAYER MOVE
       room.board[index] = player.symbol
 
       let winner = checkWinner(room.board)
       if (winner) {
         room.finished = true
         await room.save()
-
-        await Match.create({
-          roomCode: code,
-          playerX: room.players[0]?.userId,
-          playerO: room.isAI ? "AI" : room.players[1]?.userId,
-          winner: winner === "draw" ? "D" : winner
-        })
-
-        return io.to(code).emit("gameOver", {
-          winner,
-          board: room.board
-        })
+        return io.to(code).emit("gameOver", { winner, board: room.board })
       }
 
-      /* ---------- SWITCH TURN ---------- */
-      room.turn = "O"
+      room.turn = toggleTurn(room.turn)
       await room.save()
 
       io.to(code).emit("moveMade", {
@@ -185,8 +187,8 @@ export const socketHandler = (io, socket) => {
         turn: room.turn
       })
 
-      /* ---------- AI MOVE ---------- */
-      if (room.isAI) {
+      // AI MOVE
+      if (room.isAI && room.turn === "O" && room.players.length === 1) {
         await delay(500)
 
         const aiMove = minimax([...room.board], "O")
@@ -198,14 +200,6 @@ export const socketHandler = (io, socket) => {
         if (winner) {
           room.finished = true
           await room.save()
-
-          await Match.create({
-            roomCode: code,
-            playerX: room.players[0].userId,
-            playerO: "AI",
-            winner: winner === "draw" ? "D" : winner
-          })
-
           return io.to(code).emit("gameOver", {
             winner,
             board: room.board
@@ -226,7 +220,7 @@ export const socketHandler = (io, socket) => {
   })
 
   /* =========================
-     REMATCH (AUTO)
+     REMATCH (AUTO SAFE)
   ========================= */
   socket.on("voteRematch", async ({ code }) => {
     try {
@@ -249,7 +243,6 @@ export const socketHandler = (io, socket) => {
         room.turn = "X"
         room.finished = false
         room.rematchVotes = []
-
         await room.save()
         io.to(code).emit("rematchStarted", { room })
       } else {
