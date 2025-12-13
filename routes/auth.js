@@ -1,7 +1,7 @@
 import express from "express"
-import bcrypt from "bcryptjs"
 import User from "../models/User.js"
 import { signToken } from "../utils/jwt.js"
+import bcrypt from "bcryptjs"
 
 const router = express.Router()
 
@@ -21,12 +21,8 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "User already exists" })
     }
 
-    const hash = await bcrypt.hash(password, 10)
-
-    const user = await User.create({
-      username,
-      password: hash
-    })
+    // ✅ DO NOT HASH HERE
+    const user = await User.create({ username, password })
 
     const token = signToken({
       id: user._id,
@@ -54,7 +50,8 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Username and password required" })
     }
 
-    const user = await User.findOne({ username })
+    // 🔥 IMPORTANT FIX
+    const user = await User.findOne({ username }).select("+password")
     if (!user) {
       return res.status(400).json({ error: "Invalid credentials" })
     }
