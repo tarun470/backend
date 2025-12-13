@@ -178,42 +178,79 @@ export const socketHandler = (io, socket) => {
       })
 
       /* =========================
-         AI MOVE
+         AI MOVE (STABLE)
       ========================= */
-      if (room.isAI && room.turn === "O") {
+      if (room.isAI && room.turn === "O" && !room.finished) {
+        await new Promise(r => setTimeout(r, 400)) // smooth delay
+
         const move = minimax([...room.board], "O")
-        if (move?.index !== undefined) {
-          room.board[move.index] = "O"
+        if (move?.index === undefined) return
 
-          const aiWin = checkWinner(room.board)
-          if (aiWin) {
-            room.finished = true
-            await room.save()
+        room.board[move.index] = "O"
 
-            await Match.create({
-              roomCode: code,
-              playerX: room.players[0].userId,
-              playerO: "AI",
-              winner: aiWin === "draw" ? "D" : aiWin
-            })
-
-            return io.to(code).emit("gameOver", {
-              winner: aiWin,
-              board: room.board
-            })
-          }
-
-          room.turn = "X"
+        const aiWin = checkWinner(room.board)
+        if (aiWin) {
+          room.finished = true
           await room.save()
 
-          io.to(code).emit("moveMade", {
-            board: room.board,
-            turn: room.turn
+          await Match.create({
+            roomCode: code,
+            playerX: room.players[0].userId,
+            playerO: "AI",
+            winner: aiWin === "draw" ? "D" : aiWin
+          })
+
+          return io.to(code).emit("gameOver", {
+            winner: aiWin,
+            board: room.board
           })
         }
+
+        room.turn = "X"
+        await room.save()
+
+        io.to(code).emit("moveMade", {
+          board: room.board,
+          turn: room.turn
+        })
       }
     } catch (err) {
       console.error("Make move error:", err)
+    }
+  })
+
+  /* =========================
+     REMATCH (FIXED)
+  ========================= */
+  socket.on("voteRematch", async ({ code }) => {
+    try {
+      const room = await Room.findOne({ code })
+      if (!room) return
+
+      // prevent duplicate vote
+      if (!room.rematchVotes.some(id => id.equals(user.id))) {
+        room.rematchVotes.push(user.id)
+      }
+
+      // AI → 1 vote, 1v1 → both players
+      const requiredVotes = room.isAI ? 1 : room.players.length
+
+      if (room.rematchVotes.length >= requiredVotes) {
+        room.board = Array(9).fill(null)
+        room.finished = false
+        room.turn = "X"
+        room.rematchVotes = []
+
+        await room.save()
+        io.to(code).emit("rematchStarted", { room })
+      } else {
+        await room.save()
+        io.to(code).emit("rematchVote", {
+          votes: room.rematchVotes.length
+        })
+      }
+    } catch (err) {
+      console.error("Rematch error:", err)
     }
   })
 
