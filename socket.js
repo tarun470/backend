@@ -3,18 +3,27 @@ import Match from "./models/Match.js"
 import { minimax, checkWinner } from "./utils/ai.js"
 import { verifyToken } from "./utils/jwt.js"
 
+/* =========================
+   UTILS
+========================= */
 function generateCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase()
 }
 
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+
+/* =========================
+   SOCKET HANDLER
+========================= */
 export const socketHandler = (io, socket) => {
+
   /* =========================
      SOCKET AUTH
   ========================= */
   const token = socket.handshake.auth?.token
   const user = verifyToken(token)
 
-  if (!user || !user.id) {
+  if (!user?.id) {
     socket.disconnect()
     return
   }
@@ -98,10 +107,7 @@ export const socketHandler = (io, socket) => {
       const room = await Room.findOne({ code })
       if (!room) return socket.emit("roomError", "Room not found")
 
-      // 🔁 reconnect support
-      const existing = room.players.find(p =>
-        p.userId.equals(user.id)
-      )
+      const existing = room.players.find(p => p.userId.equals(user.id))
 
       if (existing) {
         existing.socketId = socket.id
@@ -110,7 +116,6 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // 👥 join as second player
       if (!room.isAI && room.players.length < 2) {
         const symbol = room.players[0].symbol === "X" ? "O" : "X"
         room.players.push({
@@ -123,7 +128,6 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // 👀 spectator
       if (!room.spectators.some(id => id.equals(user.id))) {
         room.spectators.push(user.id)
         await room.save()
@@ -164,13 +168,11 @@ export const socketHandler = (io, socket) => {
           winner: winner === "draw" ? "D" : winner
         })
 
-        return io.to(code).emit("gameOver", {
-          winner,
-          board: room.board
-        })
+        return io.to(code).emit("gameOver", { winner, board: room.board })
       }
 
-      room.turn = "O"
+      /* ---------- SWITCH TURN ---------- */
+      room.turn = room.isAI ? "O" : "O"
       await room.save()
 
       io.to(code).emit("moveMade", {
@@ -178,9 +180,9 @@ export const socketHandler = (io, socket) => {
         turn: room.turn
       })
 
-      /* ---------- AI MOVE (GUARANTEED) ---------- */
+      /* ---------- AI MOVE ---------- */
       if (room.isAI) {
-        await new Promise(r => setTimeout(r, 500))
+        await delay(500)
 
         const aiMove = minimax([...room.board], "O")
         if (aiMove?.index === undefined) return
@@ -213,13 +215,14 @@ export const socketHandler = (io, socket) => {
           turn: room.turn
         })
       }
+
     } catch (err) {
       console.error("Make move error:", err)
     }
   })
 
   /* =========================
-     REMATCH (AUTO + STATUS)
+     REMATCH (AUTO)
   ========================= */
   socket.on("voteRematch", async ({ code }) => {
     try {
@@ -230,16 +233,14 @@ export const socketHandler = (io, socket) => {
         room.rematchVotes.push(user.id)
       }
 
-      const requiredVotes = room.isAI ? 1 : 2
+      const required = room.isAI ? 1 : room.players.length
 
-      // 🔔 vote status
       io.to(code).emit("rematchVote", {
         votes: room.rematchVotes.length,
-        required: requiredVotes
+        required
       })
 
-      // 🔁 auto restart
-      if (room.rematchVotes.length >= requiredVotes) {
+      if (room.rematchVotes.length >= required) {
         room.board = Array(9).fill(null)
         room.turn = "X"
         room.finished = false
@@ -267,3 +268,4 @@ export const socketHandler = (io, socket) => {
     }
   })
 }
+

@@ -24,6 +24,9 @@ const playerSchema = new mongoose.Schema(
 
 const roomSchema = new mongoose.Schema(
   {
+    /* =========================
+       BASIC ROOM INFO
+    ========================= */
     code: {
       type: String,
       required: true,
@@ -38,6 +41,24 @@ const roomSchema = new mongoose.Schema(
       index: true
     },
 
+    /* =========================
+       GAME MODE
+    ========================= */
+    isAI: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+
+    difficulty: {
+      type: String,
+      enum: ["easy", "medium", "hard"],
+      default: "hard"
+    },
+
+    /* =========================
+       GAME STATE
+    ========================= */
     board: {
       type: [String],
       default: () => Array(9).fill(null)
@@ -60,14 +81,31 @@ const roomSchema = new mongoose.Schema(
       default: "X"
     },
 
-    rematchVotes: {
-      type: [mongoose.Schema.Types.ObjectId],
-      default: []
+    winner: {
+      type: String,
+      enum: ["X", "O", "draw", null],
+      default: null
     },
 
     finished: {
       type: Boolean,
       default: false
+    },
+
+    /* =========================
+       REMATCH
+    ========================= */
+    rematchVotes: {
+      type: [mongoose.Schema.Types.ObjectId],
+      default: []
+    },
+
+    /* =========================
+       SAFETY (AI SYNC)
+    ========================= */
+    lastMoveAt: {
+      type: Date,
+      default: Date.now
     }
   },
   { timestamps: true }
