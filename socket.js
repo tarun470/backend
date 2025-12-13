@@ -98,7 +98,7 @@ export const socketHandler = (io, socket) => {
       const room = await Room.findOne({ code })
       if (!room) return socket.emit("roomError", "Room not found")
 
-      // reconnect
+      // 🔁 reconnect support
       const existing = room.players.find(p =>
         p.userId.equals(user.id)
       )
@@ -110,7 +110,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // join as second player (1v1)
+      // 👥 join as second player
       if (!room.isAI && room.players.length < 2) {
         const symbol = room.players[0].symbol === "X" ? "O" : "X"
         room.players.push({
@@ -123,7 +123,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // spectator
+      // 👀 spectator
       if (!room.spectators.some(id => id.equals(user.id))) {
         room.spectators.push(user.id)
         await room.save()
@@ -138,7 +138,7 @@ export const socketHandler = (io, socket) => {
   })
 
   /* =========================
-     MAKE MOVE
+     MAKE MOVE (PLAYER + AI)
   ========================= */
   socket.on("makeMove", async ({ code, index }) => {
     try {
@@ -149,10 +149,11 @@ export const socketHandler = (io, socket) => {
       const player = room.players.find(p => p.socketId === socket.id)
       if (!player || room.turn !== player.symbol) return
 
+      /* ---------- PLAYER MOVE ---------- */
       room.board[index] = player.symbol
 
-      const win = checkWinner(room.board)
-      if (win) {
+      let winner = checkWinner(room.board)
+      if (winner) {
         room.finished = true
         await room.save()
 
@@ -160,16 +161,16 @@ export const socketHandler = (io, socket) => {
           roomCode: code,
           playerX: room.players[0]?.userId,
           playerO: room.isAI ? "AI" : room.players[1]?.userId,
-          winner: win === "draw" ? "D" : win
+          winner: winner === "draw" ? "D" : winner
         })
 
         return io.to(code).emit("gameOver", {
-          winner: win,
+          winner,
           board: room.board
         })
       }
 
-      room.turn = room.turn === "X" ? "O" : "X"
+      room.turn = "O"
       await room.save()
 
       io.to(code).emit("moveMade", {
@@ -177,19 +178,17 @@ export const socketHandler = (io, socket) => {
         turn: room.turn
       })
 
-      /* =========================
-         AI MOVE
-      ========================= */
-      if (room.isAI && room.turn === "O") {
-        await new Promise(r => setTimeout(r, 400))
+      /* ---------- AI MOVE (GUARANTEED) ---------- */
+      if (room.isAI) {
+        await new Promise(r => setTimeout(r, 500))
 
-        const move = minimax([...room.board], "O")
-        if (move?.index === undefined) return
+        const aiMove = minimax([...room.board], "O")
+        if (aiMove?.index === undefined) return
 
-        room.board[move.index] = "O"
+        room.board[aiMove.index] = "O"
 
-        const aiWin = checkWinner(room.board)
-        if (aiWin) {
+        winner = checkWinner(room.board)
+        if (winner) {
           room.finished = true
           await room.save()
 
@@ -197,11 +196,11 @@ export const socketHandler = (io, socket) => {
             roomCode: code,
             playerX: room.players[0].userId,
             playerO: "AI",
-            winner: aiWin === "draw" ? "D" : aiWin
+            winner: winner === "draw" ? "D" : winner
           })
 
           return io.to(code).emit("gameOver", {
-            winner: aiWin,
+            winner,
             board: room.board
           })
         }
@@ -220,7 +219,7 @@ export const socketHandler = (io, socket) => {
   })
 
   /* =========================
-     REMATCH (AUTO + WAITING MESSAGE)
+     REMATCH (AUTO + STATUS)
   ========================= */
   socket.on("voteRematch", async ({ code }) => {
     try {
@@ -233,17 +232,17 @@ export const socketHandler = (io, socket) => {
 
       const requiredVotes = room.isAI ? 1 : 2
 
-      // 🔔 send vote status for UI
+      // 🔔 vote status
       io.to(code).emit("rematchVote", {
         votes: room.rematchVotes.length,
         required: requiredVotes
       })
 
-      // ✅ auto restart
+      // 🔁 auto restart
       if (room.rematchVotes.length >= requiredVotes) {
         room.board = Array(9).fill(null)
-        room.finished = false
         room.turn = "X"
+        room.finished = false
         room.rematchVotes = []
 
         await room.save()
