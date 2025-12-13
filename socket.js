@@ -4,7 +4,7 @@ import { minimax, checkWinner } from "./utils/ai.js"
 import { verifyToken } from "./utils/jwt.js"
 
 /* =========================
-   UTILS
+   HELPERS
 ========================= */
 function generateCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -107,8 +107,8 @@ export const socketHandler = (io, socket) => {
       const room = await Room.findOne({ code })
       if (!room) return socket.emit("roomError", "Room not found")
 
+      // 🔁 reconnect support
       const existing = room.players.find(p => p.userId.equals(user.id))
-
       if (existing) {
         existing.socketId = socket.id
         await room.save()
@@ -116,6 +116,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
+      // 👥 join as second player (1v1)
       if (!room.isAI && room.players.length < 2) {
         const symbol = room.players[0].symbol === "X" ? "O" : "X"
         room.players.push({
@@ -128,6 +129,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
+      // 👀 spectator
       if (!room.spectators.some(id => id.equals(user.id))) {
         room.spectators.push(user.id)
         await room.save()
@@ -168,11 +170,14 @@ export const socketHandler = (io, socket) => {
           winner: winner === "draw" ? "D" : winner
         })
 
-        return io.to(code).emit("gameOver", { winner, board: room.board })
+        return io.to(code).emit("gameOver", {
+          winner,
+          board: room.board
+        })
       }
 
       /* ---------- SWITCH TURN ---------- */
-      room.turn = room.isAI ? "O" : "O"
+      room.turn = "O"
       await room.save()
 
       io.to(code).emit("moveMade", {
@@ -215,7 +220,6 @@ export const socketHandler = (io, socket) => {
           turn: room.turn
         })
       }
-
     } catch (err) {
       console.error("Make move error:", err)
     }
@@ -268,4 +272,3 @@ export const socketHandler = (io, socket) => {
     }
   })
 }
-
