@@ -8,22 +8,30 @@ function generateCode() {
 }
 
 export const socketHandler = (io, socket) => {
-  console.log("Socket connected", socket.id)
+  // 🔐 socket authentication (MANDATORY)
+  const token = socket.handshake.auth?.token
+  const user = verifyToken(token)
+
+  if (!user) {
+    console.log("Unauthorized socket:", socket.id)
+    socket.disconnect()
+    return
+  }
+
+  socket.user = user
+  console.log("Socket connected:", socket.id, "User:", user.id)
 
   /* =========================
      CREATE ROOM
   ========================= */
-  socket.on("createRoom", async ({ token }) => {
-    const payload = verifyToken(token)
-    if (!payload) return socket.emit("error", "Unauthorized")
-
+  socket.on("createRoom", async () => {
     let code = generateCode()
     while (await Room.findOne({ code })) code = generateCode()
 
     const room = await Room.create({
       code,
       board: Array(9).fill(null),
-      players: [{ userId: payload.id, symbol: "X", socketId: socket.id }],
+      players: [{ userId: user.id, symbol: "X", socketId: socket.id }],
       spectators: [],
       turn: "X",
       rematchVotes: [],
@@ -37,25 +45,22 @@ export const socketHandler = (io, socket) => {
   /* =========================
      JOIN ROOM
   ========================= */
-  socket.on("joinRoom", async ({ code, token }) => {
-    const payload = verifyToken(token)
-    if (!payload) return socket.emit("error", "Unauthorized")
-
+  socket.on("joinRoom", async ({ code }) => {
     const room = await Room.findOne({ code })
     if (!room) return socket.emit("error", "Room not found")
 
-    // Prevent same user joining twice
-    const alreadyPlayer = room.players.some(p =>
-      p.userId.equals(payload.id)
-    )
-    if (alreadyPlayer) {
+    // 🔁 Reconnect handling
+    const existing = room.players.find(p => p.userId === user.id)
+    if (existing) {
+      existing.socketId = socket.id
+      await room.save()
       socket.join(code)
       return socket.emit("playerJoined", { room })
     }
 
     if (room.players.length < 2) {
       const symbol = room.players[0].symbol === "X" ? "O" : "X"
-      room.players.push({ userId: payload.id, symbol, socketId: socket.id })
+      room.players.push({ userId: user.id, symbol, socketId: socket.id })
       await room.save()
       socket.join(code)
       io.to(code).emit("playerJoined", { room })
@@ -80,7 +85,7 @@ export const socketHandler = (io, socket) => {
     if (room.board[index] !== null) return
 
     const player = room.players.find(p => p.socketId === socket.id)
-    if (!player) return socket.emit("error", "Not a player")
+    if (!player) return
     if (room.turn !== player.symbol) return
 
     room.board[index] = player.symbol
@@ -104,9 +109,7 @@ export const socketHandler = (io, socket) => {
     await room.save()
     io.to(code).emit("moveMade", { board: room.board, turn: room.turn })
 
-    /* =========================
-       AI MOVE (1vAI)
-    ========================= */
+    /* ===== AI MOVE ===== */
     if (room.players.length === 1 && room.turn === "O") {
       const move = minimax([...room.board], "O")
       if (move?.index !== undefined) {
@@ -116,14 +119,12 @@ export const socketHandler = (io, socket) => {
         if (aiWin) {
           room.finished = true
           await room.save()
-
           await Match.create({
             roomCode: code,
             playerX: room.players[0].userId,
             playerO: "AI",
             winner: aiWin === "draw" ? "D" : aiWin
           })
-
           io.to(code).emit("gameOver", { winner: aiWin, board: room.board })
         } else {
           room.turn = "X"
@@ -141,11 +142,8 @@ export const socketHandler = (io, socket) => {
     const room = await Room.findOne({ code })
     if (!room) return
 
-    const player = room.players.find(p => p.socketId === socket.id)
-    if (!player) return
-
-    if (!room.rematchVotes.includes(player.userId)) {
-      room.rematchVotes.push(player.userId)
+    if (!room.rematchVotes.includes(user.id)) {
+      room.rematchVotes.push(user.id)
     }
 
     if (room.rematchVotes.length === room.players.length) {
@@ -165,20 +163,12 @@ export const socketHandler = (io, socket) => {
      DISCONNECT
   ========================= */
   socket.on("disconnect", async () => {
-    const rooms = await Room.find({
-      $or: [{ "players.socketId": socket.id }, { spectators: socket.id }]
-    })
-
+    const rooms = await Room.find({ "players.userId": user.id })
     for (const r of rooms) {
-      r.players = r.players.filter(p => p.socketId !== socket.id)
-      r.spectators = r.spectators.filter(s => s !== socket.id)
-
-      if (r.players.length === 0) {
-        await Room.deleteOne({ _id: r._id })
-      } else {
-        await r.save()
-        io.to(r.code).emit("playerLeft", { room: r })
-      }
+      const p = r.players.find(p => p.userId === user.id)
+      if (p) p.socketId = null
+      await r.save()
+      io.to(r.code).emit("playerLeft", { room: r })
     }
   })
 }
