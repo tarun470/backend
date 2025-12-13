@@ -110,7 +110,7 @@ export const socketHandler = (io, socket) => {
         return io.to(code).emit("playerJoined", { room })
       }
 
-      // join as second player (1v1 only)
+      // join as second player (1v1)
       if (!room.isAI && room.players.length < 2) {
         const symbol = room.players[0].symbol === "X" ? "O" : "X"
         room.players.push({
@@ -178,10 +178,10 @@ export const socketHandler = (io, socket) => {
       })
 
       /* =========================
-         AI MOVE (STABLE)
+         AI MOVE
       ========================= */
-      if (room.isAI && room.turn === "O" && !room.finished) {
-        await new Promise(r => setTimeout(r, 400)) // smooth delay
+      if (room.isAI && room.turn === "O") {
+        await new Promise(r => setTimeout(r, 400))
 
         const move = minimax([...room.board], "O")
         if (move?.index === undefined) return
@@ -220,21 +220,26 @@ export const socketHandler = (io, socket) => {
   })
 
   /* =========================
-     REMATCH (FIXED)
+     REMATCH (AUTO + WAITING MESSAGE)
   ========================= */
   socket.on("voteRematch", async ({ code }) => {
     try {
       const room = await Room.findOne({ code })
       if (!room) return
 
-      // prevent duplicate vote
       if (!room.rematchVotes.some(id => id.equals(user.id))) {
         room.rematchVotes.push(user.id)
       }
 
-      // AI → 1 vote, 1v1 → both players
-      const requiredVotes = room.isAI ? 1 : room.players.length
+      const requiredVotes = room.isAI ? 1 : 2
 
+      // 🔔 send vote status for UI
+      io.to(code).emit("rematchVote", {
+        votes: room.rematchVotes.length,
+        required: requiredVotes
+      })
+
+      // ✅ auto restart
       if (room.rematchVotes.length >= requiredVotes) {
         room.board = Array(9).fill(null)
         room.finished = false
@@ -245,9 +250,6 @@ export const socketHandler = (io, socket) => {
         io.to(code).emit("rematchStarted", { room })
       } else {
         await room.save()
-        io.to(code).emit("rematchVote", {
-          votes: room.rematchVotes.length
-        })
       }
     } catch (err) {
       console.error("Rematch error:", err)
