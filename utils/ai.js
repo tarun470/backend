@@ -1,3 +1,5 @@
+import { checkWinner } from "./ai.js" // remove if same file
+
 export function minimax(board, player, depth = 0, alpha = -Infinity, beta = Infinity) {
   const winner = checkWinner(board)
 
@@ -11,7 +13,7 @@ export function minimax(board, player, depth = 0, alpha = -Infinity, beta = Infi
     if (board[i] !== null) continue
 
     board[i] = player
-    const result = minimax(
+    const { score } = minimax(
       board,
       player === "O" ? "X" : "O",
       depth + 1,
@@ -20,15 +22,13 @@ export function minimax(board, player, depth = 0, alpha = -Infinity, beta = Infi
     )
     board[i] = null
 
-    const score = result.score
-
     if (player === "O") {
-      if (score > alpha) {
+      if (bestMove === null || score > alpha) {
         alpha = score
         bestMove = { index: i, score }
       }
     } else {
-      if (score < beta) {
+      if (bestMove === null || score < beta) {
         beta = score
         bestMove = { index: i, score }
       }
@@ -37,5 +37,6 @@ export function minimax(board, player, depth = 0, alpha = -Infinity, beta = Infi
     if (alpha >= beta) break
   }
 
-  return bestMove || { score: 0 }
+  // ✅ ALWAYS return a move when possible
+  return bestMove ?? { index: null, score: 0 }
 }
