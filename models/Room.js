@@ -4,13 +4,20 @@ const playerSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User"
+      ref: "User",
+      required: true
     },
+
     symbol: {
       type: String,
-      enum: ["X", "O"]
+      enum: ["X", "O"],
+      required: true
     },
-    socketId: String
+
+    socketId: {
+      type: String,
+      required: true
+    }
   },
   { _id: false }
 )
@@ -27,7 +34,8 @@ const roomSchema = new mongoose.Schema(
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true
+      required: true,
+      index: true
     },
 
     board: {

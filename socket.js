@@ -9,12 +9,12 @@ function generateCode() {
 
 export const socketHandler = (io, socket) => {
   /* =========================
-     SOCKET AUTH
+     SOCKET AUTH (SAFE)
   ========================= */
   const token = socket.handshake.auth?.token
   const user = verifyToken(token)
 
-  if (!user) {
+  if (!user || !user.id) {
     console.log("❌ Unauthorized socket:", socket.id)
     socket.disconnect()
     return
@@ -27,153 +27,169 @@ export const socketHandler = (io, socket) => {
      CREATE ROOM
   ========================= */
   socket.on("createRoom", async () => {
-    let code
-    do {
-      code = generateCode()
-    } while (await Room.findOne({ code }))
+    try {
+      let code
+      do {
+        code = generateCode()
+      } while (await Room.findOne({ code }))
 
-    const room = await Room.create({
-      code,
-      createdBy: user.id,
-      board: Array(9).fill(null),
-      players: [
-        {
-          userId: user.id,
-          symbol: "X",
-          socketId: socket.id
-        }
-      ],
-      spectators: [],
-      turn: "X",
-      rematchVotes: [],
-      finished: false
-    })
+      const room = await Room.create({
+        code,
+        createdBy: user.id,
+        board: Array(9).fill(null),
+        players: [
+          {
+            userId: user.id,
+            symbol: "X",
+            socketId: socket.id
+          }
+        ],
+        spectators: [],
+        turn: "X",
+        rematchVotes: [],
+        finished: false
+      })
 
-    socket.join(code)
-    socket.emit("roomCreated", { room })
+      socket.join(code)
+      socket.emit("roomCreated", { room })
+    } catch (err) {
+      console.error("Create room socket error:", err)
+      socket.emit("roomError", "Failed to create room")
+    }
   })
 
   /* =========================
      JOIN ROOM
   ========================= */
   socket.on("joinRoom", async ({ code }) => {
-    const room = await Room.findOne({ code })
-    if (!room) return socket.emit("roomError", "Room not found")
+    try {
+      const room = await Room.findOne({ code })
+      if (!room) return socket.emit("roomError", "Room not found")
 
-    // 🔁 RECONNECT HANDLING
-    const existing = room.players.find(p =>
-      p.userId.equals(user.id)
-    )
+      // 🔁 Reconnect handling
+      const existing = room.players.find(p =>
+        p.userId.equals(user.id)
+      )
 
-    if (existing) {
-      existing.socketId = socket.id
-      await room.save()
+      if (existing) {
+        existing.socketId = socket.id
+        await room.save()
+        socket.join(code)
+        return io.to(code).emit("playerJoined", { room })
+      }
+
+      // 👥 Player join
+      if (room.players.length < 2) {
+        const symbol =
+          room.players[0].symbol === "X" ? "O" : "X"
+
+        room.players.push({
+          userId: user.id,
+          symbol,
+          socketId: socket.id
+        })
+
+        await room.save()
+        socket.join(code)
+        return io.to(code).emit("playerJoined", { room })
+      }
+
+      // 👀 Spectator join
+      if (!room.spectators.some(id => id.equals(user.id))) {
+        room.spectators.push(user.id)
+        await room.save()
+      }
+
       socket.join(code)
-      return io.to(code).emit("playerJoined", { room })
+      socket.emit("joinedAsSpectator", { room })
+    } catch (err) {
+      console.error("Join room socket error:", err)
+      socket.emit("roomError", "Failed to join room")
     }
-
-    // 👥 PLAYER JOIN
-    if (room.players.length < 2) {
-      const symbol =
-        room.players[0].symbol === "X" ? "O" : "X"
-
-      room.players.push({
-        userId: user.id,
-        symbol,
-        socketId: socket.id
-      })
-
-      await room.save()
-      socket.join(code)
-      return io.to(code).emit("playerJoined", { room })
-    }
-
-    // 👀 SPECTATOR JOIN
-    if (!room.spectators.some(id => id.equals(user.id))) {
-      room.spectators.push(user.id)
-      await room.save()
-    }
-
-    socket.join(code)
-    socket.emit("joinedAsSpectator", { room })
   })
 
   /* =========================
      MAKE MOVE
   ========================= */
   socket.on("makeMove", async ({ code, index }) => {
-    if (index < 0 || index > 8) return
+    try {
+      if (index < 0 || index > 8) return
 
-    const room = await Room.findOne({ code })
-    if (!room || room.finished) return
-    if (room.board[index] !== null) return
+      const room = await Room.findOne({ code })
+      if (!room || room.finished) return
+      if (room.board[index] !== null) return
 
-    const player = room.players.find(
-      p => p.socketId === socket.id
-    )
-    if (!player) return
-    if (room.turn !== player.symbol) return
+      const player = room.players.find(
+        p => p.socketId === socket.id
+      )
+      if (!player) return
+      if (room.turn !== player.symbol) return
 
-    room.board[index] = player.symbol
+      room.board[index] = player.symbol
 
-    const winner = checkWinner(room.board)
-    if (winner) {
-      room.finished = true
+      const winner = checkWinner(room.board)
+      if (winner) {
+        room.finished = true
+        await room.save()
+
+        await Match.create({
+          roomCode: code,
+          playerX: room.players[0]?.userId || null,
+          playerO: room.players[1]?.userId || "AI",
+          winner: winner === "draw" ? "D" : winner
+        })
+
+        return io.to(code).emit("gameOver", {
+          winner,
+          board: room.board
+        })
+      }
+
+      room.turn = room.turn === "X" ? "O" : "X"
       await room.save()
 
-      await Match.create({
-        roomCode: code,
-        playerX: room.players[0]?.userId || null,
-        playerO: room.players[1]?.userId || "AI",
-        winner: winner === "draw" ? "D" : winner
+      io.to(code).emit("moveMade", {
+        board: room.board,
+        turn: room.turn
       })
 
-      return io.to(code).emit("gameOver", {
-        winner,
-        board: room.board
-      })
-    }
+      /* =========================
+         AI MOVE
+      ========================= */
+      if (room.players.length === 1 && room.turn === "O") {
+        const move = minimax([...room.board], "O")
+        if (move?.index !== undefined) {
+          room.board[move.index] = "O"
+          const aiWin = checkWinner(room.board)
 
-    room.turn = room.turn === "X" ? "O" : "X"
-    await room.save()
-    io.to(code).emit("moveMade", {
-      board: room.board,
-      turn: room.turn
-    })
+          if (aiWin) {
+            room.finished = true
+            await room.save()
 
-    /* =========================
-       AI MOVE
-    ========================= */
-    if (room.players.length === 1 && room.turn === "O") {
-      const move = minimax([...room.board], "O")
-      if (move?.index !== undefined) {
-        room.board[move.index] = "O"
-        const aiWin = checkWinner(room.board)
+            await Match.create({
+              roomCode: code,
+              playerX: room.players[0].userId,
+              playerO: "AI",
+              winner: aiWin === "draw" ? "D" : aiWin
+            })
 
-        if (aiWin) {
-          room.finished = true
-          await room.save()
+            io.to(code).emit("gameOver", {
+              winner: aiWin,
+              board: room.board
+            })
+          } else {
+            room.turn = "X"
+            await room.save()
 
-          await Match.create({
-            roomCode: code,
-            playerX: room.players[0].userId,
-            playerO: "AI",
-            winner: aiWin === "draw" ? "D" : aiWin
-          })
-
-          io.to(code).emit("gameOver", {
-            winner: aiWin,
-            board: room.board
-          })
-        } else {
-          room.turn = "X"
-          await room.save()
-          io.to(code).emit("moveMade", {
-            board: room.board,
-            turn: room.turn
-          })
+            io.to(code).emit("moveMade", {
+              board: room.board,
+              turn: room.turn
+            })
+          }
         }
       }
+    } catch (err) {
+      console.error("Make move socket error:", err)
     }
   })
 
@@ -181,26 +197,30 @@ export const socketHandler = (io, socket) => {
      REMATCH
   ========================= */
   socket.on("voteRematch", async ({ code }) => {
-    const room = await Room.findOne({ code })
-    if (!room) return
+    try {
+      const room = await Room.findOne({ code })
+      if (!room) return
 
-    if (!room.rematchVotes.some(id => id.equals(user.id))) {
-      room.rematchVotes.push(user.id)
-    }
+      if (!room.rematchVotes.some(id => id.equals(user.id))) {
+        room.rematchVotes.push(user.id)
+      }
 
-    if (room.rematchVotes.length === room.players.length) {
-      room.board = Array(9).fill(null)
-      room.finished = false
-      room.turn = "X"
-      room.rematchVotes = []
-      await room.save()
+      if (room.rematchVotes.length === room.players.length) {
+        room.board = Array(9).fill(null)
+        room.finished = false
+        room.turn = "X"
+        room.rematchVotes = []
+        await room.save()
 
-      io.to(code).emit("rematchStarted", { room })
-    } else {
-      await room.save()
-      io.to(code).emit("rematchVote", {
-        votes: room.rematchVotes.length
-      })
+        io.to(code).emit("rematchStarted", { room })
+      } else {
+        await room.save()
+        io.to(code).emit("rematchVote", {
+          votes: room.rematchVotes.length
+        })
+      }
+    } catch (err) {
+      console.error("Rematch socket error:", err)
     }
   })
 
@@ -208,18 +228,22 @@ export const socketHandler = (io, socket) => {
      DISCONNECT
   ========================= */
   socket.on("disconnect", async () => {
-    const rooms = await Room.find({
-      "players.userId": user.id
-    })
+    try {
+      const rooms = await Room.find({
+        "players.userId": user.id
+      })
 
-    for (const r of rooms) {
-      r.players = r.players.filter(
-        p => !p.userId.equals(user.id)
-      )
-      await r.save()
-      io.to(r.code).emit("playerLeft", { room: r })
+      for (const r of rooms) {
+        r.players = r.players.filter(
+          p => !p.userId.equals(user.id)
+        )
+        await r.save()
+        io.to(r.code).emit("playerLeft", { room: r })
+      }
+
+      console.log("🔌 Socket disconnected:", socket.id)
+    } catch (err) {
+      console.error("Disconnect socket error:", err)
     }
-
-    console.log("🔌 Socket disconnected:", socket.id)
   })
 }
